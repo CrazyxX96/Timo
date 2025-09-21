@@ -1,0 +1,77 @@
+// sw.js
+const VERSION = 'bingo-sw-v1';
+const ORIGIN = self.location.origin;
+const BASE = self.registration.scope; // endet auf deinem Unterpfad, z. B. .../bingo-app/
+
+// Wichtige Assets für Offline (relativ, damit Root & Unterordner funktionieren)
+const CORE_ASSETS = [
+  './',
+  './index.html',
+  './manifest.webmanifest',
+  './sw.js',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+  './icons/maskable-512.png',
+  './icons/apple-touch-icon.png',
+  // Externe Libs, die du verwendest:
+  'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.0/dist/tesseract.min.js'
+];
+
+// Hilfsfunktion: Nur eigene Domain zwischenspeichern (außer bewusst extern)
+const isSameOrigin = (url) => url.startsWith(ORIGIN) || url.startsWith('https://cdn.jsdelivr.net/');
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(VERSION).then((cache) => cache.addAll(CORE_ASSETS))
+  );
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(keys.map((k) => (k === VERSION ? null : caches.delete(k))))
+    )
+  );
+  self.clients.claim();
+});
+
+// Strategie:
+// - HTML (Navigationsanfragen): network-first mit fallback auf Cache
+// - Sonstiges: cache-first mit Update (stale-while-revalidate light)
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+
+  // Nur GET cachen
+  if (req.method !== 'GET') return;
+
+  if (req.mode === 'navigate') {
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          const copy = res.clone();
+          caches.open(VERSION).then((c) => c.put(req, copy));
+          return res;
+        })
+        .catch(async () => (await caches.match(req)) || (await caches.match('./index.html')))
+    );
+    return;
+  }
+
+  if (!isSameOrigin(req.url)) return;
+
+  event.respondWith(
+    caches.match(req).then((cached) => {
+      const net = fetch(req)
+        .then((res) => {
+          if (res && res.ok) {
+            const copy = res.clone();
+            caches.open(VERSION).then((c) => c.put(req, copy));
+          }
+          return res;
+        })
+        .catch(() => cached);
+      return cached || net;
+    })
+  );
+});
